@@ -1,0 +1,435 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PLATFORM CORE (Phase 4)
+// ═══════════════════════════════════════════════════════════════════════
+
+model Tenant {
+  id                   String   @id @default(cuid())
+  slug                 String   @unique
+  name                 String
+  logoUrl              String?
+  addressLine          String?
+  city                 String?
+  state                String?
+  country              String?  @default("India")
+  timezone             String   @default("Asia/Kolkata")
+  primaryColor         String   @default("#1D9E75")
+  secondaryColor       String   @default("#378ADD")
+  overdueThresholdDays Int      @default(7)
+  isActive             Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  users               User[]
+  flats               Flat[]
+  residents           Resident[]
+  complaints          Complaint[]
+  complaintCategories ComplaintCategory[]
+  notices             Notice[]
+  refreshTokens       RefreshToken[]
+  visitorPasses       VisitorPass[]
+  sosAlerts           SosAlert[]
+  maintenanceBills    MaintenanceBill[]
+  payments            Payment[]
+  polls               Poll[]
+
+  @@index([isActive])
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  RESIDENT
+  WATCHMAN
+  MAINTENANCE_STAFF
+}
+
+model User {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  tenant          Tenant?   @relation(fields: [tenantId], references: [id])
+  email           String
+  passwordHash    String
+  role            Role
+  firstName       String
+  lastName        String
+  phone           String?
+  isActive        Boolean   @default(true)
+  emailVerifiedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?
+  updatedBy String?
+
+  resident              Resident?
+  refreshTokens         RefreshToken[]
+  complaintsChanged     ComplaintStatusHistory[] @relation("ChangedBy")
+  noticesPosted         Notice[]                 @relation("PostedBy")
+  visitorPassesApproved VisitorPass[]            @relation("ApprovedBy")
+  gateCheckIns          VisitorPass[]            @relation("CheckedInBy")
+  sosAcknowledged       SosAlert[]                @relation("AcknowledgedBy")
+  pollsCreated          Poll[]                    @relation("PollCreatedBy")
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?   @relation(fields: [tenantId], references: [id])
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// RESIDENT MANAGEMENT (Phase 4)
+// ═══════════════════════════════════════════════════════════════════════
+
+enum FlatType {
+  ONE_BHK
+  TWO_BHK
+  THREE_BHK
+  OTHER
+}
+
+model Flat {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  flatNumber String
+  block      String?
+  floor      Int?
+  type       FlatType @default(OTHER)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  residents        Resident[]
+  maintenanceBills MaintenanceBill[]
+
+  @@unique([tenantId, block, flatNumber])
+  @@index([tenantId])
+}
+
+enum ResidentType {
+  OWNER
+  TENANT_OCCUPANT
+}
+
+model Resident {
+  id           String       @id @default(cuid())
+  tenantId     String
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  userId       String       @unique
+  user         User         @relation(fields: [userId], references: [id])
+  flatId       String
+  flat         Flat         @relation(fields: [flatId], references: [id])
+  residentType ResidentType
+  isPrimary    Boolean      @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  complaints    Complaint[]
+  visitorPasses VisitorPass[]
+  sosAlerts     SosAlert[]
+  payments      Payment[]
+  pollVotes     PollVote[]
+
+  @@index([tenantId, flatId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMPLAINT MANAGEMENT (Phase 4)
+// ═══════════════════════════════════════════════════════════════════════
+
+model ComplaintCategory {
+  id       String  @id @default(cuid())
+  tenantId String
+  tenant   Tenant  @relation(fields: [tenantId], references: [id])
+  name     String
+  isActive Boolean @default(true)
+
+  complaints Complaint[]
+
+  @@unique([tenantId, name])
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ComplaintStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+model Complaint {
+  id          String            @id @default(cuid())
+  tenantId    String
+  tenant      Tenant            @relation(fields: [tenantId], references: [id])
+  residentId  String
+  resident    Resident          @relation(fields: [residentId], references: [id])
+  categoryId  String
+  category    ComplaintCategory @relation(fields: [categoryId], references: [id])
+
+  description String   @db.Text
+  photoUrl    String?
+  priority    Priority?
+  status      ComplaintStatus @default(OPEN)
+  resolvedAt  DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+  createdBy String?
+  updatedBy String?
+
+  statusHistory ComplaintStatusHistory[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, categoryId])
+  @@index([tenantId, createdAt])
+}
+
+model ComplaintStatusHistory {
+  id              String           @id @default(cuid())
+  tenantId        String
+  complaintId     String
+  complaint       Complaint        @relation(fields: [complaintId], references: [id])
+  fromStatus      ComplaintStatus?
+  toStatus        ComplaintStatus
+  note            String?          @db.Text
+  changedByUserId String
+  changedBy       User             @relation("ChangedBy", fields: [changedByUserId], references: [id])
+  changedAt       DateTime         @default(now())
+
+  @@index([tenantId, complaintId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// NOTICE BOARD (Phase 4)
+// ═══════════════════════════════════════════════════════════════════════
+
+model Notice {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  title          String
+  body           String   @db.Text
+  isImportant    Boolean  @default(false)
+  postedByUserId String
+  postedBy       User     @relation("PostedBy", fields: [postedByUserId], references: [id])
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([tenantId, isImportant, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// VISITOR & GATE MANAGEMENT (new)
+// ═══════════════════════════════════════════════════════════════════════
+
+enum VisitorPassStatus {
+  PENDING       // created by resident, not yet at the gate
+  CHECKED_IN    // watchman scanned it, visitor is on the premises
+  CHECKED_OUT   // visitor has left
+  EXPIRED       // validUntil passed without check-in
+  CANCELLED     // resident cancelled it before use
+}
+
+model VisitorPass {
+  id               String            @id @default(cuid())
+  tenantId         String
+  tenant           Tenant            @relation(fields: [tenantId], references: [id])
+  residentId       String
+  resident         Resident          @relation(fields: [residentId], references: [id])
+  approvedByUserId String
+  approvedBy       User              @relation("ApprovedBy", fields: [approvedByUserId], references: [id])
+
+  visitorName  String
+  visitorPhone String?
+  purpose      String?
+  qrToken      String            @unique // opaque random token embedded in the QR code, not the DB id
+  status       VisitorPassStatus @default(PENDING)
+
+  validFrom  DateTime
+  validUntil DateTime
+
+  checkedInAt      DateTime?
+  checkedInByUserId String?
+  checkedInBy       User?     @relation("CheckedInBy", fields: [checkedInByUserId], references: [id])
+  checkedOutAt     DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([tenantId, status])
+  @@index([tenantId, validUntil])
+  @@index([qrToken])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SOS / EMERGENCY ALERTS (new)
+// ═══════════════════════════════════════════════════════════════════════
+
+enum SosStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model SosAlert {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  residentId String
+  resident   Resident  @relation(fields: [residentId], references: [id])
+
+  status SosStatus @default(ACTIVE)
+  notes  String?   @db.Text
+
+  triggeredAt        DateTime  @default(now())
+  acknowledgedByUserId String?
+  acknowledgedBy       User?   @relation("AcknowledgedBy", fields: [acknowledgedByUserId], references: [id])
+  acknowledgedAt      DateTime?
+  resolvedAt          DateTime?
+
+  @@index([tenantId, status])
+  @@index([tenantId, triggeredAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MAINTENANCE BILLING & PAYMENTS (new)
+// ═══════════════════════════════════════════════════════════════════════
+
+enum BillStatus {
+  PENDING
+  PAID
+  OVERDUE
+}
+
+model MaintenanceBill {
+  id              String     @id @default(cuid())
+  tenantId        String
+  tenant          Tenant     @relation(fields: [tenantId], references: [id])
+  flatId          String
+  flat            Flat       @relation(fields: [flatId], references: [id])
+
+  billingPeriod   String     // "2026-07" -- string, not a date, since it names a MONTH not an instant
+  amount          Int        // stored in paise (smallest currency unit) -- never floats for money
+  penaltyAmount   Int        @default(0)
+  dueDate         DateTime
+  status          BillStatus @default(PENDING)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  payments Payment[]
+
+  @@unique([tenantId, flatId, billingPeriod])
+  @@index([tenantId, status])
+}
+
+enum PaymentStatus {
+  CREATED
+  SUCCESS
+  FAILED
+}
+
+model Payment {
+  id                String        @id @default(cuid())
+  tenantId          String
+  tenant            Tenant        @relation(fields: [tenantId], references: [id])
+  billId            String
+  bill              MaintenanceBill @relation(fields: [billId], references: [id])
+  residentId        String
+  resident          Resident      @relation(fields: [residentId], references: [id])
+
+  amount            Int           // paise, matches MaintenanceBill.amount currency handling
+  provider          String        @default("razorpay")
+  providerOrderId   String?
+  providerPaymentId String?
+  status            PaymentStatus @default(CREATED)
+  paidAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([providerOrderId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// POLLS / VOTING (new)
+// ═══════════════════════════════════════════════════════════════════════
+
+model Poll {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id])
+  question        String
+  createdByUserId String
+  createdBy       User     @relation("PollCreatedBy", fields: [createdByUserId], references: [id])
+  closesAt        DateTime
+  isActive        Boolean  @default(true)
+
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  options PollOption[]
+  votes   PollVote[]
+
+  @@index([tenantId, isActive])
+}
+
+model PollOption {
+  id     String @id @default(cuid())
+  pollId String
+  poll   Poll   @relation(fields: [pollId], references: [id])
+  text   String
+
+  votes PollVote[]
+}
+
+model PollVote {
+  id         String     @id @default(cuid())
+  pollId     String
+  poll       Poll       @relation(fields: [pollId], references: [id])
+  optionId   String
+  option     PollOption @relation(fields: [optionId], references: [id])
+  residentId String
+  resident   Resident   @relation(fields: [residentId], references: [id])
+  votedAt    DateTime   @default(now())
+
+  @@unique([pollId, residentId]) // one vote per resident per poll -- enforced at the DB level, not just in application code
+}

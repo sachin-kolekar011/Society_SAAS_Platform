@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark mode toggled via ThemeContext setting data-mode on <html>, not the
+   OS-preference-only `dark:` variant default -- see tailwind.config.js
+   darkMode: ['selector', '[data-mode="dark"]'] */

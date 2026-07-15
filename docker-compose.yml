@@ -1,0 +1,35 @@
+# RDS is NOT a service here, deliberately -- Phase 2's decision to use a
+# managed RDS instance instead of a containerized MySQL, specifically to
+# get automated backups without having to build that ourselves. DATABASE_URL
+# in .env points at the RDS endpoint from `terraform output rds_endpoint`.
+
+services:
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "4000" # not published to the host -- only nginx talks to this container, enforced by not using `ports:` here
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:4000/api/v1', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    build:
+      context: . # repo root -- see infra/nginx/Dockerfile's comment on why
+      dockerfile: infra/nginx/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - app
+    volumes:
+      # Let's Encrypt certs, once obtained via the Ansible playbook's
+      # commented-out certbot task -- mounted read-only, nginx never
+      # writes here.
+      - /etc/letsencrypt:/etc/letsencrypt:ro

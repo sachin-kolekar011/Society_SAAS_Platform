@@ -1,0 +1,132 @@
+---
+# Run with: ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
+#
+# Division of responsibility, worth stating explicitly: Terraform creates
+# the INFRASTRUCTURE (the EC2 instance, RDS, networking) -- this playbook
+# configures WHAT RUNS ON IT (Docker, the app, NGINX, certs). CI/CD
+# (.github/workflows/ci-cd.yml) handles ONGOING deploys after this initial
+# provisioning -- it does a much lighter "pull latest code, rebuild
+# containers" rather than re-running this whole playbook on every push.
+# Three tools, three different jobs, not three ways of doing the same thing.
+
+- name: Provision the society SaaS app server
+  hosts: app_servers
+  become: true
+
+  vars:
+    app_dir: /opt/society-saas
+    repo_url: "{{ git_repo_url }}" # pass via -e git_repo_url=https://github.com/you/your-repo.git
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install prerequisite packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - git
+        state: present
+
+    # ── Docker installation (official repo, not the outdated Ubuntu one) ──
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable\n"
+        mode: '0644'
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+
+    - name: Add the deploy user to the docker group (avoids needing sudo for every docker command)
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    # ── App deployment ────────────────────────────────────────────────────
+    - name: Ensure app directory exists
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Clone or update the repository
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: true # discards any local changes on the server -- the server is a deploy target, not a place anyone edits code by hand
+      become: true
+      become_user: "{{ ansible_user }}"
+
+    - name: Template the production .env file
+      ansible.builtin.template:
+        src: templates/env.j2
+        dest: "{{ app_dir }}/.env"
+        owner: "{{ ansible_user }}"
+        mode: '0600' # readable only by the deploy user -- this file holds every secret the app needs
+      # All the {{ jwt_access_secret }}-style variables referenced in
+      # env.j2 should live in an Ansible Vault file (group_vars/all/vault.yml,
+      # encrypted with `ansible-vault encrypt`), never committed in plaintext.
+      # Run this playbook with --ask-vault-pass once that file exists.
+
+    - name: Build and start the app via Docker Compose
+      ansible.builtin.command:
+        cmd: docker compose up -d --build --remove-orphans
+        chdir: "{{ app_dir }}"
+      become: true
+      become_user: "{{ ansible_user }}"
+      environment:
+        # Docker needs the group membership from the earlier task to take
+        # effect, which normally requires a fresh login shell -- this env
+        # var (used by some Docker CLI versions as a fallback) plus running
+        # as become_user rather than a raw shell sidesteps needing an
+        # actual SSH reconnect mid-playbook.
+        DOCKER_HOST: "unix:///var/run/docker.sock"
+      # This command is not truly idempotent-detectable from Ansible's
+      # perspective -- `docker compose up -d --build` may rebuild nothing
+      # (code unchanged) or rebuild everything (code changed), and telling
+      # those apart would mean parsing Docker's build output. Rather than
+      # let the command module's default (always "changed") pass silently,
+      # this is an explicit, honest acknowledgment of that limitation.
+      changed_when: true
+
+    # ── HTTPS via Let's Encrypt ──────────────────────────────────────────
+    # Commented out by default -- requires a real domain (or nip.io, which
+    # DOES work for this, per Phase 1) pointed at the Elastic IP, and NGINX
+    # temporarily stopped for the HTTP-01 challenge. Uncomment once you're
+    # ready to move off plain HTTP.
+    #
+    # - name: Install certbot
+    #   ansible.builtin.apt:
+    #     name: certbot
+    #     state: present
+    #
+    # - name: Obtain a certificate (standalone mode -- stop nginx first)
+    #   ansible.builtin.command:
+    #     cmd: certbot certonly --standalone -d {{ domain_name }} --non-interactive --agree-tos -m {{ admin_email }}

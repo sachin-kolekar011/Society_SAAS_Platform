@@ -1,0 +1,82 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Runs on every push AND every PR -- catches breakage before merge,
+  # not just before deploy. ────────────────────────────────────────────────
+  test:
+    name: Test backend & build frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Run backend unit tests
+        working-directory: backend
+        # These are exactly the 23 tests validated during development --
+        # the ones that don't need a live database (Prisma-dependent
+        # integration tests are a Phase 11 addition, run separately
+        # against a real MySQL service container, not blocking here).
+        run: npm test
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+  # ── Deploy: only runs after tests pass, and only on main (never on a
+  # PR from an untrusted fork, which is a real security boundary -- PR
+  # workflows from forks don't get access to repository secrets by
+  # default, and this job's `if` doesn't change that, it's belt-and-braces). ──
+  deploy:
+    name: Deploy to EC2
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            cd /opt/society-saas
+            git pull origin main
+            docker compose up -d --build --remove-orphans
+            docker image prune -f
+            # image prune, not a full system prune -- reclaims space from
+            # old build layers without touching volumes or the RDS
+            # connection, which live outside this container's lifecycle
+            # entirely.
+
+# ── Secrets this workflow expects, set under Settings > Secrets > Actions:
+# EC2_HOST              -- the Elastic IP from `terraform output ec2_public_ip`
+# EC2_SSH_PRIVATE_KEY    -- the private half of the key pair Terraform references (key_pair_name), full PEM contents
+#
+# This workflow does NOT provision the server -- that's the Ansible
+# playbook's job, run once by hand (or from a separate, manually-triggered
+# workflow) before this one's `deploy` job has anywhere to deploy TO. This
+# job assumes /opt/society-saas already exists with a working .env, which
+# is exactly what the Ansible playbook sets up.

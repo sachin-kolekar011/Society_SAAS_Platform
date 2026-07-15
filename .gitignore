@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Environment secrets -- NEVER commit these
+.env
+.env.local
+backend/.env
+frontend/.env
+
+# Build output
+frontend/dist/
+backend/dist/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Uploads (local dev fallback only -- production uses Cloudinary)
+uploads/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.backup
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform.lock.hcl
+
+# Ansible
+infra/ansible/group_vars/all/vault.yml
+infra/ansible/*.retry
+
+# OS/editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
