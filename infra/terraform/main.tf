@@ -42,7 +42,7 @@ resource "aws_security_group" "app_server" {
   }
 
   ingress {
-    description = "HTTPS -- once Let's Encrypt is set up (see Ansible playbook)"
+    description = "HTTPS -- once Lets Encrypt is set up (see Ansible playbook)"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -62,7 +62,7 @@ resource "aws_security_group" "app_server" {
 
 resource "aws_security_group" "database" {
   name_prefix = "${var.project_name}-db-"
-  description = "RDS MySQL -- reachable ONLY from the app server's security group, never from the open internet"
+  description = "RDS MySQL -- reachable ONLY from the app servers security group, never from the open internet"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -112,7 +112,14 @@ resource "aws_db_instance" "mysql" {
   # not just firewalled.
   publicly_accessible = false
 
-  backup_retention_period = 7 # daily automated backups, 7-day retention -- free within Free Tier storage allowance
+  # 0 disables automated backups entirely -- found via a real FreeTierRestrictionError
+  # on `terraform apply`: my original assumption that 7-day retention was
+  # "free within Free Tier" was wrong. Automated backups consume backup
+  # storage that isn't covered the way this comment used to claim. Trade-off,
+  # stated plainly: zero backups means zero recovery if the database is
+  # lost or corrupted -- acceptable for a student project's test data, not
+  # for real residents' data. Revisit this the moment that's no longer true.
+  backup_retention_period = 0
   skip_final_snapshot     = true # acceptable for a student project; set false + provide final_snapshot_identifier once this holds real resident data
   deletion_protection     = false # same reasoning -- flip both of these once this is a real production tenant's data
 
